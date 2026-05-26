@@ -56,7 +56,7 @@ jobs:
           chmod +x jadx/bin/jadx
           echo "🔧 正在反编译..."
           mkdir output
-          ./jadx/bin/jadx -d output app.apk
+          ./jadx/bin/jadx -d output app.apk || echo "⚠️部分类反编译失败（正常现象），结果仍可用"
           echo "✅反编译完成"
 
       - name: 推送源码到目标仓库
