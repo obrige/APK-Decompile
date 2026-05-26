@@ -116,7 +116,7 @@ jobs:
           git config user.name "$GIT_USER_NAME"
           git config user.email "$GIT_USER_EMAIL"
           git add .
-          git commit -m "🔨自动反编译提交 - $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "无新变化"
+          git commit -m "🔨初始项目提交" || echo "无新变化"
           git remote add origin "$AUTH_URL"
           git push -u origin master --force || git push -u origin main --force
           echo "🎉源码已推送至$TARGET_REPO"
