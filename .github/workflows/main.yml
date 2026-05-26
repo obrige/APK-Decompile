@@ -1,0 +1,99 @@
+name: "APK反编译并推送源码"
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: 'APK文件的直链（需可直接下载）'
+        required: true
+      target_repo:
+        description: '目标仓库名（简写如myapp，会自动推送至你的用户名/myapp；或完整格式owner/repo）'
+        required: true
+        default: ''
+      create_repo:
+        description: '若目标仓库不存在是否自动创建（true/false）'
+        required: false
+        default: 'true'
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 确定目标仓库全称
+        id: repo
+        run: |
+          INPUT="${{ inputs.target_repo }}"
+          if [[ "$INPUT" == *"/"* ]]; then
+            # 输入了完整格式owner/repo
+            echo "FULL_NAME=$INPUT" >> $GITHUB_OUTPUT
+          else
+            # 只输入了仓库名，自动补全当前触发用户
+            echo "FULL_NAME=${{ github.actor }}/$INPUT" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 下载APK
+        run: |
+          echo "⬇️正在下载 APK..."
+          wget -q --show-progress -O app.apk "${{ inputs.apk_url }}" || {
+            echo "❌下载失败，请检查链接是否可直接访问"
+            exit 1
+          }
+          echo "✅下载完成"
+
+      - name: 用jadx反编译
+        run: |
+          echo "🔧 正在反编译..."
+          mkdir output
+          docker run --rm \
+            -v $(pwd):/workspace \
+            ghcr.io/skylot/jadx:latest \
+            jadx -e /workspace/output /workspace/app.apk
+          echo "✅反编译完成"
+
+      - name: 推送源码到目标仓库
+        env:
+          PAT: ${{ secrets.PAT_TOKEN }}
+          TARGET_REPO: ${{ steps.repo.outputs.FULL_NAME }}
+          CREATE_REPO: ${{ inputs.create_repo }}
+          GIT_USER_NAME: ${{ github.actor }}
+          GIT_USER_EMAIL: ${{ github.actor }}@users.noreply.github.com
+        run: |
+          OWNER=$(echo "$TARGET_REPO" | cut -d'/' -f1)
+          REPO=$(echo "$TARGET_REPO" | cut -d'/' -f2)
+          REPO_URL="https://github.com/$TARGET_REPO.git"
+          AUTH_URL="https://${{ github.actor }}:${PAT}@github.com/$TARGET_REPO.git"
+
+          echo "📤目标仓库：$TARGET_REPO"
+          echo "👤提交作者：$GIT_USER_NAME <$GIT_USER_EMAIL>"
+
+          # 检查目标仓库是否存在，如允许则自动创建
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${{ github.actor }}:${PAT}" "https://api.github.com/repos/$TARGET_REPO")
+          if [ "$HTTP_CODE" = "404" ]; then
+            if [ "$CREATE_REPO" = "true" ]; then
+              echo "🏗️ 仓库不存在，正在创建..."
+              curl -s -X POST -u "${{ github.actor }}:${PAT}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                https://api.github.com/user/repos \
+                -d "{\"name\":\"$REPO\", \"private\":true, \"auto_init\":false}"
+              sleep 5
+              echo "✅仓库已创建"
+            else
+              echo "❌目标仓库不存在且未开启自动创建"
+              exit 1
+            fi
+          elif [ "$HTTP_CODE" = "200" ]; then
+            echo "✅仓库已存在"
+          else
+            echo "⚠️API返回状态码：$HTTP_CODE，请检查Token权限"
+          fi
+
+          # 初始化并推送
+          cd output
+          git init
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+          git add .
+          git commit -m "🔨自动反编译提交 - $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "无新变化"
+          git remote add origin "$AUTH_URL"
+          git push -u origin master --force || git push -u origin main --force
+          echo "🎉源码已推送至$TARGET_REPO"
