@@ -40,6 +40,9 @@ jobs:
           }
           echo "✅下载完成"
 
+      - name: 登录 GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
       - name: 用jadx反编译
         run: |
           echo "🔧 正在反编译..."
