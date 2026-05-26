@@ -24,10 +24,8 @@ jobs:
         run: |
           INPUT="${{ inputs.target_repo }}"
           if [[ "$INPUT" == *"/"* ]]; then
-            # 输入了完整格式owner/repo
             echo "FULL_NAME=$INPUT" >> $GITHUB_OUTPUT
           else
-            # 只输入了仓库名，自动补全当前触发用户
             echo "FULL_NAME=${{ github.actor }}/$INPUT" >> $GITHUB_OUTPUT
           fi
 
@@ -69,31 +67,47 @@ jobs:
         run: |
           OWNER=$(echo "$TARGET_REPO" | cut -d'/' -f1)
           REPO=$(echo "$TARGET_REPO" | cut -d'/' -f2)
-          REPO_URL="https://github.com/$TARGET_REPO.git"
           AUTH_URL="https://${{ github.actor }}:${PAT}@github.com/$TARGET_REPO.git"
 
           echo "📤目标仓库：$TARGET_REPO"
           echo "👤提交作者：$GIT_USER_NAME <$GIT_USER_EMAIL>"
 
-          # 检查目标仓库是否存在，如允许则自动创建
+          # 检查目标仓库是否存在
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${{ github.actor }}:${PAT}" "https://api.github.com/repos/$TARGET_REPO")
+
           if [ "$HTTP_CODE" = "404" ]; then
             if [ "$CREATE_REPO" = "true" ]; then
               echo "🏗️ 仓库不存在，正在创建..."
-              curl -s -X POST -u "${{ github.actor }}:${PAT}" \
+              CREATE_RESP=$(curl -s -w "\n%{http_code}" -X POST -u "${{ github.actor }}:${PAT}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 https://api.github.com/user/repos \
-                -d "{\"name\":\"$REPO\", \"private\":false, \"auto_init\":false}"
-              sleep 5
-              echo "✅仓库已创建"
+                -d "{\"name\":\"$REPO\", \"private\":false, \"auto_init\":false}")
+              CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
+              CREATE_BODY=$(echo "$CREATE_RESP" | head -1)
+              if [ "$CREATE_CODE" = "201" ]; then
+                echo "✅仓库已创建"
+                sleep 5
+              elif [ "$CREATE_CODE" = "403" ]; then
+                echo "❌创建仓库失败：PAT_TOKEN 权限不足"
+                echo "💡请确保 PAT 具有 'repo' 权限：https://github.com/settings/tokens"
+                exit 1
+              else
+                echo "❌创建仓库失败 (HTTP $CREATE_CODE): $CREATE_BODY"
+                exit 1
+              fi
             else
               echo "❌目标仓库不存在且未开启自动创建"
               exit 1
             fi
           elif [ "$HTTP_CODE" = "200" ]; then
             echo "✅仓库已存在"
+          elif [ "$HTTP_CODE" = "403" ]; then
+            echo "❌查询仓库失败：PAT_TOKEN 权限不足"
+            echo "💡请确保 PAT 具有 'repo' 权限：https://github.com/settings/tokens"
+            exit 1
           else
             echo "⚠️API返回状态码：$HTTP_CODE，请检查Token权限"
+            exit 1
           fi
 
           # 初始化并推送
