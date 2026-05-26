@@ -40,6 +40,12 @@ jobs:
           }
           echo "✅下载完成"
 
+      - name: 安装 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: 用jadx反编译
         run: |
           echo "🔧 正在下载 jadx..."
@@ -47,6 +53,7 @@ jobs:
           VER="${TAG#v}"
           wget -q "https://github.com/skylot/jadx/releases/download/${TAG}/jadx-${VER}.zip" -O jadx.zip
           unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
           echo "🔧 正在反编译..."
           mkdir output
           ./jadx/bin/jadx -d output app.apk
