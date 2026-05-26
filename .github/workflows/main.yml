@@ -40,17 +40,16 @@ jobs:
           }
           echo "✅下载完成"
 
-      - name: 登录 GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
       - name: 用jadx反编译
         run: |
+          echo "🔧 正在下载 jadx..."
+          TAG=$(curl -s https://api.github.com/repos/skylot/jadx/releases/latest | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p')
+          VER="${TAG#v}"
+          wget -q "https://github.com/skylot/jadx/releases/download/${TAG}/jadx-${VER}.zip" -O jadx.zip
+          unzip -q jadx.zip -d jadx
           echo "🔧 正在反编译..."
           mkdir output
-          docker run --rm \
-            -v $(pwd):/workspace \
-            ghcr.io/skylot/jadx:latest \
-            jadx -e /workspace/output /workspace/app.apk
+          ./jadx/bin/jadx -d output app.apk
           echo "✅反编译完成"
 
       - name: 推送源码到目标仓库
