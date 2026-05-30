@@ -11,7 +11,7 @@ on:
         required: false
         default: ''
       target_repo:
-        description: '目标仓库(简写如lin，或完整格式owner/repo)'
+        description: '目标仓库(简写如repo，或完整格式owner/repo)'
         required: true
       version:
         description: '版本号(可选，如v1.0.0)'
@@ -107,21 +107,27 @@ jobs:
             echo "🔖使用指定提交：$COMMIT_HASH"
             if [[ "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
               FULL_HASH="$COMMIT_HASH"
+              git fetch --depth 1 origin "$FULL_HASH" || {
+                echo "❌无法获取提交：$FULL_HASH"
+                exit 1
+              }
             else
               echo "🔍正在解析短哈希..."
-              FULL_HASH=$(git ls-remote origin "$COMMIT_HASH" | head -1 | awk '{print $1}')
-              if [ -z "$FULL_HASH" ]; then
-                echo "❌无法找到匹配的提交：$COMMIT_HASH"
-                echo "💡请使用完整的40位哈希，或确认短哈希正确"
-                exit 1
-              fi
-              echo "✅完整哈希：$FULL_HASH"
+              git fetch --depth 1 origin "$COMMIT_HASH" 2>/dev/null || {
+                git fetch --unshallow 2>/dev/null || true
+                git fetch origin 2>/dev/null || true
+                FULL_HASH=$(git rev-parse "$COMMIT_HASH" 2>/dev/null || echo "")
+                if [ -z "$FULL_HASH" ]; then
+                  echo "❌无法找到匹配的提交：$COMMIT_HASH"
+                  exit 1
+                fi
+                echo "✅完整哈希：$FULL_HASH"
+                git checkout "$FULL_HASH" 2>/dev/null || {
+                  git fetch --depth 1 origin "$FULL_HASH"
+                }
+              }
             fi
-            git fetch --depth 1 origin "$FULL_HASH" || {
-              echo "❌无法获取提交：$FULL_HASH"
-              exit 1
-            }
-            git checkout FETCH_HEAD
+            git checkout FETCH_HEAD 2>/dev/null || true
           fi
 
           echo "✅源码提取完成"
