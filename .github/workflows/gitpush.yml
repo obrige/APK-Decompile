@@ -158,7 +158,7 @@ jobs:
       - name: 重命名项目
         if: ${{ inputs.rename_from != '' && inputs.rename_to != '' }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           FROM="$RENAME_FROM"
           TO="$RENAME_TO"
           FROM_LOWER=$(echo "$FROM" | tr '[:upper:]' '[:lower:]')
@@ -170,21 +170,21 @@ jobs:
           echo "🔄重命名：$FROM → $TO（含 $FROM_LOWER/$FROM_UPPER 变体）"
 
           # 替换精确大小写
-          count=$(grep -rlIF "$FROM" "$EXPORT_DIR" 2>/dev/null | wc -l)
-          grep -rlIF "$FROM" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM|$TO|g"
+          count=$(grep -rlIF "$FROM" "$EXPORT_DIR" 2>/dev/null | wc -l || true)
+          grep -rlIF "$FROM" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM|$TO|g" || true
           echo "  $FROM → $TO：$count 个文件"
 
           # 替换小写
           if [ "$FROM_LOWER" != "$FROM" ]; then
-            count=$(grep -rlIF "$FROM_LOWER" "$EXPORT_DIR" 2>/dev/null | wc -l)
-            grep -rlIF "$FROM_LOWER" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM_LOWER|$TO_LOWER|g"
+            count=$(grep -rlIF "$FROM_LOWER" "$EXPORT_DIR" 2>/dev/null | wc -l || true)
+            grep -rlIF "$FROM_LOWER" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM_LOWER|$TO_LOWER|g" || true
             echo "  $FROM_LOWER → $TO_LOWER：$count 个文件"
           fi
 
           # 替换大写
           if [ "$FROM_UPPER" != "$FROM" ] && [ "$FROM_UPPER" != "$FROM_LOWER" ]; then
-            count=$(grep -rlIF "$FROM_UPPER" "$EXPORT_DIR" 2>/dev/null | wc -l)
-            grep -rlIF "$FROM_UPPER" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM_UPPER|$TO_UPPER|g"
+            count=$(grep -rlIF "$FROM_UPPER" "$EXPORT_DIR" 2>/dev/null | wc -l || true)
+            grep -rlIF "$FROM_UPPER" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM_UPPER|$TO_UPPER|g" || true
             echo "  $FROM_UPPER → $TO_UPPER：$count 个文件"
           fi
 
