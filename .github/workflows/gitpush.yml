@@ -4,23 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       source_repo:
-        description: '源仓库地址（完整URL，如 https://github.com/user/repo.git）'
+        description: '源仓库地址(完整URL，如https://github.com/user/repo.git)'
         required: true
       commit_hash:
-        description: '要提取的提交哈希（留空则使用最新提交）'
+        description: '要提取的提交哈希(留空则使用最新提交，支持短哈希)'
         required: false
         default: ''
       target_repo:
-        description: '目标仓库（简写如repo，或完整格式 owner/repo）'
+        description: '目标仓库(简写如lin，或完整格式owner/repo)'
         required: true
       version:
-        description: '版本号（可选，如 v1.0.0）'
+        description: '版本号(可选，如v1.0.0)'
         required: false
         default: ''
       create_repo:
         description: '若目标仓库不存在是否自动创建'
         required: false
-        default: 'true'
+        default: ''
 
 jobs:
   push:
@@ -51,7 +51,6 @@ jobs:
           REPO=$(echo "$TARGET_REPO" | cut -d'/' -f2)
           AUTH_URL="https://${PAT}@github.com/$TARGET_REPO.git"
 
-          # 获取用户信息
           USER_INFO=$(curl -s -H "Authorization: token ${PAT}" https://api.github.com/user)
           GIT_USER_NAME=$(echo "$USER_INFO" | jq -r '.login')
           GIT_USER_ID=$(echo "$USER_INFO" | jq -r '.id')
@@ -60,7 +59,6 @@ jobs:
           echo "👤提交身份：$GIT_USER_NAME <$GIT_USER_EMAIL>"
           echo "📤目标仓库：$TARGET_REPO"
 
-          # 检查/创建目标仓库
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${PAT}" "https://api.github.com/repos/$TARGET_REPO")
 
           if [ "$HTTP_CODE" = "404" ]; then
@@ -73,7 +71,7 @@ jobs:
                 -d "{\"name\":\"$REPO\", \"private\":false, \"auto_init\":false}")
               CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
               if [ "$CREATE_CODE" != "201" ]; then
-                echo "❌创建仓库失败 (HTTP $CREATE_CODE)"
+                echo "❌创建仓库失败(HTTP $CREATE_CODE)"
                 exit 1
               fi
               echo "✅仓库已创建"
@@ -85,17 +83,16 @@ jobs:
           elif [ "$HTTP_CODE" = "200" ]; then
             echo "✅仓库已存在"
           elif [ "$HTTP_CODE" = "401" ]; then
-            echo "❌PAT_TOKEN 无效或已过期"
+            echo "❌PAT_TOKEN无效或已过期"
             exit 1
           elif [ "$HTTP_CODE" = "403" ]; then
-            echo "❌PAT_TOKEN 权限不足，需要 'repo' 权限"
+            echo "❌PAT_TOKEN权限不足，需要'repo'权限"
             exit 1
           else
-            echo "❌API 异常 (HTTP $HTTP_CODE)"
+            echo "❌API异常(HTTP $HTTP_CODE)"
             exit 1
           fi
 
-          # 提取源码
           echo "📥源仓库：$SOURCE_REPO"
           TMP_CLONE=$(mktemp -d)
           cd "$TMP_CLONE"
@@ -108,8 +105,20 @@ jobs:
             git checkout FETCH_HEAD
           else
             echo "🔖使用指定提交：$COMMIT_HASH"
-            git fetch --depth 1 origin "$COMMIT_HASH" || {
-              echo "❌提交哈希无效：$COMMIT_HASH"
+            if [[ "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
+              FULL_HASH="$COMMIT_HASH"
+            else
+              echo "🔍正在解析短哈希..."
+              FULL_HASH=$(git ls-remote origin "$COMMIT_HASH" | head -1 | awk '{print $1}')
+              if [ -z "$FULL_HASH" ]; then
+                echo "❌无法找到匹配的提交：$COMMIT_HASH"
+                echo "💡请使用完整的40位哈希，或确认短哈希正确"
+                exit 1
+              fi
+              echo "✅完整哈希：$FULL_HASH"
+            fi
+            git fetch --depth 1 origin "$FULL_HASH" || {
+              echo "❌无法获取提交：$FULL_HASH"
               exit 1
             }
             git checkout FETCH_HEAD
@@ -117,7 +126,6 @@ jobs:
 
           echo "✅源码提取完成"
 
-          # 准备推送
           TMP_PUSH=$(mktemp -d)
           cd "$TMP_CLONE"
           find . -mindepth 1 -maxdepth 1 -not -name '.git' | while read item; do
@@ -126,31 +134,24 @@ jobs:
 
           cd "$TMP_PUSH"
           rm -rf .git
-          git init
+          git init -b main
           git config user.name "$GIT_USER_NAME"
           git config user.email "$GIT_USER_EMAIL"
           git add .
 
-          # 提交信息
           if [ -n "$VERSION" ]; then
-            COMMIT_MSG="🚀版本$VERSION"
+            COMMIT_MSG="🚀版本 $VERSION"
           else
             COMMIT_MSG="📦源码推送"
           fi
 
           git commit -m "$COMMIT_MSG" || echo "⚠️无文件变更"
           git remote add origin "$AUTH_URL"
-
-          if git push -u origin main --force 2>/dev/null; then
-            BRANCH="main"
-          else
-            git push -u origin master --force
-            BRANCH="master"
-          fi
+          git push -u origin main --force
 
           echo ""
           echo "🎉推送完成"
-          echo "📤仓库：$TARGET_REPO ($BRANCH)"
+          echo "📤仓库：$TARGET_REPO(main)"
           echo "👤提交者：$GIT_USER_NAME"
           echo "📝信息：$COMMIT_MSG"
           echo "💡单次提交，无历史记录"
