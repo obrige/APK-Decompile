@@ -4,160 +4,221 @@ on:
   workflow_dispatch:
     inputs:
       source_repo:
-        description: '源仓库地址(完整URL，如https://github.com/user/repo.git)'
+        description: '源仓库地址（完整URL，如 https://github.com/user/repo.git）'
         required: true
       commit_hash:
-        description: '要提取的提交哈希(留空则使用最新提交，支持短哈希)'
+        description: '要提取的提交哈希（留空则使用最新提交，支持短哈希/分支/tag）'
         required: false
         default: ''
       target_repo:
-        description: '目标仓库(简写如repo，或完整格式owner/repo)'
+        description: '目标仓库（简写如 repo，或完整格式 owner/repo）'
         required: true
       version:
-        description: '版本号(可选，如v1.0.0)'
+        description: '版本号（可选，如 v1.0.0，会自动创建 Git Tag）'
         required: false
         default: ''
       create_repo:
         description: '若目标仓库不存在是否自动创建'
         required: false
-        default: ''
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+      private_repo:
+        description: '自动创建时是否为私有仓库'
+        required: false
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitpush-${{ github.event.inputs.target_repo }}
+  cancel-in-progress: false
 
 jobs:
   push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.PAT_TOKEN }}
     steps:
-      - name: 确定目标仓库全称
-        id: repo
+      # ── 1. 输入校验 ──
+      - name: 校验输入
+        id: validate
         run: |
-          INPUT="${{ inputs.target_repo }}"
-          if [[ "$INPUT" == *"/"* ]]; then
-            echo "FULL_NAME=$INPUT" >> $GITHUB_OUTPUT
-          else
-            echo "FULL_NAME=${{ github.actor }}/$INPUT" >> $GITHUB_OUTPUT
+          # 校验 source_repo 格式
+          if [[ ! "$SOURCE_REPO" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?$ ]]; then
+            echo "::error::source_repo 格式无效，必须是 https://github.com/owner/repo[.git]"
+            exit 1
           fi
 
-      - name: 推送源码
+          # 解析 target_repo 全名
+          INPUT="$TARGET_REPO"
+          if [[ "$INPUT" == *"/"* ]]; then
+            FULL_NAME="$INPUT"
+          else
+            FULL_NAME="${{ github.actor }}/$INPUT"
+          fi
+
+          # 校验 target_repo 格式
+          if [[ ! "$FULL_NAME" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::target_repo 格式无效：$FULL_NAME"
+            exit 1
+          fi
+
+          echo "full_name=$FULL_NAME" >> "$GITHUB_OUTPUT"
+          echo "✅ 输入校验通过"
         env:
-          PAT: ${{ secrets.PAT_TOKEN }}
-          TARGET_REPO: ${{ steps.repo.outputs.FULL_NAME }}
-          CREATE_REPO: ${{ inputs.create_repo }}
-          VERSION: ${{ inputs.version }}
           SOURCE_REPO: ${{ inputs.source_repo }}
-          COMMIT_HASH: ${{ inputs.commit_hash }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+
+      # ── 2. 确认目标仓库状态 ──
+      - name: 确认目标仓库
+        id: target
         run: |
-          set -e
+          FULL_NAME="${{ steps.validate.outputs.full_name }}"
+          OWNER="${FULL_NAME%%/*}"
+          REPO="${FULL_NAME#*/}"
 
-          OWNER=$(echo "$TARGET_REPO" | cut -d'/' -f1)
-          REPO=$(echo "$TARGET_REPO" | cut -d'/' -f2)
-          AUTH_URL="https://${PAT}@github.com/$TARGET_REPO.git"
+          echo "📤 目标仓库：$FULL_NAME"
 
-          USER_INFO=$(curl -s -H "Authorization: token ${PAT}" https://api.github.com/user)
-          GIT_USER_NAME=$(echo "$USER_INFO" | jq -r '.login')
-          GIT_USER_ID=$(echo "$USER_INFO" | jq -r '.id')
-          GIT_USER_EMAIL="${GIT_USER_ID}+${GIT_USER_NAME}@users.noreply.github.com"
-
-          echo "👤提交身份：$GIT_USER_NAME <$GIT_USER_EMAIL>"
-          echo "📤目标仓库：$TARGET_REPO"
-
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${PAT}" "https://api.github.com/repos/$TARGET_REPO")
-
-          if [ "$HTTP_CODE" = "404" ]; then
+          if gh repo view "$FULL_NAME" &>/dev/null; then
+            echo "✅ 仓库已存在"
+            echo "existed=true" >> "$GITHUB_OUTPUT"
+          else
             if [ "$CREATE_REPO" = "true" ]; then
-              echo "🏗️仓库不存在，正在创建..."
-              CREATE_RESP=$(curl -s -w "\n%{http_code}" -X POST \
-                -H "Authorization: token ${PAT}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                https://api.github.com/user/repos \
-                -d "{\"name\":\"$REPO\", \"private\":false, \"auto_init\":false}")
-              CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
-              if [ "$CREATE_CODE" != "201" ]; then
-                echo "❌创建仓库失败(HTTP $CREATE_CODE)"
-                exit 1
+              echo "🏗️ 仓库不存在，正在创建..."
+              VISIBILITY="--public"
+              if [ "$PRIVATE_REPO" = "true" ]; then
+                VISIBILITY="--private"
               fi
-              echo "✅仓库已创建"
-              sleep 5
+              gh repo create "$FULL_NAME" $VISIBILITY --clone=false --confirm
+              echo "✅ 仓库已创建"
+              echo "existed=false" >> "$GITHUB_OUTPUT"
             else
-              echo "❌目标仓库不存在且未开启自动创建"
+              echo "::error::目标仓库不存在且未开启自动创建"
               exit 1
             fi
-          elif [ "$HTTP_CODE" = "200" ]; then
-            echo "✅仓库已存在"
-          elif [ "$HTTP_CODE" = "401" ]; then
-            echo "❌PAT_TOKEN无效或已过期"
-            exit 1
-          elif [ "$HTTP_CODE" = "403" ]; then
-            echo "❌PAT_TOKEN权限不足，需要'repo'权限"
-            exit 1
-          else
-            echo "❌API异常(HTTP $HTTP_CODE)"
-            exit 1
           fi
+        env:
+          CREATE_REPO: ${{ inputs.create_repo }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
 
-          echo "📥源仓库：$SOURCE_REPO"
-          TMP_CLONE=$(mktemp -d)
-          cd "$TMP_CLONE"
-          git init
-          git remote add origin "$SOURCE_REPO"
+      # ── 3. 提取源码 ──
+      - name: 提取源码
+        id: extract
+        run: |
+          set -euo pipefail
+          SRC_DIR=$(mktemp -d)
+          echo "src_dir=$SRC_DIR" >> "$GITHUB_OUTPUT"
+
+          echo "📥 源仓库：$SOURCE_REPO"
+          git clone --bare "$SOURCE_REPO" "$SRC_DIR/repo.git"
+
+          cd "$SRC_DIR/repo.git"
 
           if [ -z "$COMMIT_HASH" ]; then
-            echo "🔖使用最新提交"
-            git fetch --depth 1 origin
-            git checkout FETCH_HEAD
-          else
-            echo "🔖使用指定提交：$COMMIT_HASH"
-            if [[ "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
-              FULL_HASH="$COMMIT_HASH"
-              git fetch --depth 1 origin "$FULL_HASH" || {
-                echo "❌无法获取提交：$FULL_HASH"
-                exit 1
-              }
-            else
-              echo "🔍正在解析短哈希..."
-              git fetch --depth 1 origin "$COMMIT_HASH" 2>/dev/null || {
-                git fetch --unshallow 2>/dev/null || true
-                git fetch origin 2>/dev/null || true
-                FULL_HASH=$(git rev-parse "$COMMIT_HASH" 2>/dev/null || echo "")
-                if [ -z "$FULL_HASH" ]; then
-                  echo "❌无法找到匹配的提交：$COMMIT_HASH"
-                  exit 1
-                fi
-                echo "✅完整哈希：$FULL_HASH"
-                git checkout "$FULL_HASH" 2>/dev/null || {
-                  git fetch --depth 1 origin "$FULL_HASH"
-                }
-              }
+            echo "🔖 使用默认分支最新提交"
+            REF=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "")
+            if [ -z "$REF" ]; then
+              REF=$(git branch -r | head -1 | sed 's/^[ *]*//' | sed 's@^origin/@@')
             fi
-            git checkout FETCH_HEAD 2>/dev/null || true
+            FULL_HASH=$(git rev-parse "origin/$REF")
+          else
+            echo "🔖 解析引用：$COMMIT_HASH"
+            FULL_HASH=$(git rev-parse --verify "$COMMIT_HASH" 2>/dev/null \
+              || git rev-parse --verify "origin/$COMMIT_HASH" 2>/dev/null \
+              || git rev-parse --verify "refs/tags/$COMMIT_HASH" 2>/dev/null \
+              || echo "")
+            if [ -z "$FULL_HASH" ]; then
+              echo "::error::无法解析引用：$COMMIT_HASH"
+              exit 1
+            fi
           fi
 
-          echo "✅源码提取完成"
+          echo "✅ 解析到提交：$FULL_HASH"
+          echo "full_hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
 
-          TMP_PUSH=$(mktemp -d)
-          cd "$TMP_CLONE"
-          find . -mindepth 1 -maxdepth 1 -not -name '.git' | while read item; do
-            cp -r "$item" "$TMP_PUSH/" 2>/dev/null || true
-          done
+          # 导出源码（不含 .git）
+          EXPORT_DIR="$SRC_DIR/export"
+          mkdir -p "$EXPORT_DIR"
+          git --work-tree="$EXPORT_DIR" checkout "$FULL_HASH" -- .
 
-          cd "$TMP_PUSH"
-          rm -rf .git
+          echo "✅ 源码提取完成"
+        env:
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          COMMIT_HASH: ${{ inputs.commit_hash }}
+
+      # ── 4. 推送到目标仓库 ──
+      - name: 推送到目标仓库
+        run: |
+          set -euo pipefail
+
+          FULL_NAME="${{ steps.validate.outputs.full_name }}"
+          FULL_HASH="${{ steps.extract.outputs.full_hash }}"
+          EXPORT_DIR="${{ steps.extract.outputs.src_dir }}/export"
+
+          # 获取认证身份
+          GIT_USER_NAME=$(gh api user -q '.login')
+          GIT_USER_ID=$(gh api user -q '.id')
+          GIT_USER_EMAIL="${GIT_USER_ID}+${GIT_USER_NAME}@users.noreply.github.com"
+          echo "👤 提交身份：$GIT_USER_NAME <$GIT_USER_EMAIL>"
+
+          # 准备推送目录
+          PUSH_DIR=$(mktemp -d)
+          cp -a "$EXPORT_DIR/." "$PUSH_DIR/"
+
+          cd "$PUSH_DIR"
           git init -b main
           git config user.name "$GIT_USER_NAME"
           git config user.email "$GIT_USER_EMAIL"
           git add .
 
+          # 提交信息
           if [ -n "$VERSION" ]; then
-            COMMIT_MSG="🚀版本 $VERSION"
+            COMMIT_MSG="🚀 版本 $VERSION (from ${FULL_HASH:0:8})"
           else
-            COMMIT_MSG="📦源码推送"
+            COMMIT_MSG="📦 源码推送 (from ${FULL_HASH:0:8})"
           fi
 
-          git commit -m "$COMMIT_MSG" || echo "⚠️无文件变更"
+          git commit -m "$COMMIT_MSG" || {
+            echo "⚠️ 无文件变更，跳过推送"
+            exit 0
+          }
+
+          # 推送
+          AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${FULL_NAME}.git"
           git remote add origin "$AUTH_URL"
           git push -u origin main --force
 
+          # 创建版本 Tag
+          if [ -n "$VERSION" ]; then
+            echo "🏷️ 创建 Tag：$VERSION"
+            git tag -a "$VERSION" -m "Release $VERSION"
+            git push origin "$VERSION" --force || echo "⚠️ Tag 推送失败（可能权限不足）"
+          fi
+
           echo ""
-          echo "🎉推送完成"
-          echo "📤仓库：$TARGET_REPO(main)"
-          echo "👤提交者：$GIT_USER_NAME"
-          echo "📝信息：$COMMIT_MSG"
-          echo "💡单次提交，无历史记录"
+          echo "🎉 推送完成"
+          echo "📤 仓库：$FULL_NAME (main)"
+          echo "👤 提交者：$GIT_USER_NAME"
+          echo "📝 信息：$COMMIT_MSG"
+          if [ -n "$VERSION" ]; then
+            echo "🏷️ Tag：$VERSION"
+          fi
+        env:
+          VERSION: ${{ inputs.version }}
+
+      # ── 5. 清理临时文件 ──
+      - name: 清理临时文件
+        if: always()
+        run: |
+          rm -rf "${{ steps.extract.outputs.src_dir }}" 2>/dev/null || true
+          echo "🧹 临时文件已清理"
