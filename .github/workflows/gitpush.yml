@@ -119,11 +119,7 @@ jobs:
 
           if [ -z "$COMMIT_HASH" ]; then
             echo "🔖使用默认分支最新提交"
-            REF=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "")
-            if [ -z "$REF" ]; then
-              REF=$(git branch -r | head -1 | sed 's/^[ *]*//' | sed 's@^origin/@@')
-            fi
-            FULL_HASH=$(git rev-parse "origin/$REF")
+            FULL_HASH=$(git rev-parse HEAD)
           else
             echo "🔖解析引用：$COMMIT_HASH"
             FULL_HASH=$(git rev-parse --verify "$COMMIT_HASH" 2>/dev/null \
@@ -138,6 +134,9 @@ jobs:
 
           echo "✅解析到提交：$FULL_HASH"
           echo "full_hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
+
+          ORIG_MSG=$(git log -1 --format='%s' "$FULL_HASH")
+          echo "orig_msg=$ORIG_MSG" >> "$GITHUB_OUTPUT"
 
           EXPORT_DIR="$SRC_DIR/export"
           mkdir -p "$EXPORT_DIR"
@@ -171,9 +170,9 @@ jobs:
           git add .
 
           if [ -n "$VERSION" ]; then
-            COMMIT_MSG="🚀版本$VERSION(from ${FULL_HASH:0:8})"
+            COMMIT_MSG="release: $VERSION"
           else
-            COMMIT_MSG="📦源码推送(from ${FULL_HASH:0:8})"
+            COMMIT_MSG="${{ steps.extract.outputs.orig_msg }}"
           fi
 
           git commit -m "$COMMIT_MSG" || {
