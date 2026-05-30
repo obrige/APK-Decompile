@@ -33,6 +33,14 @@ on:
           - 'false'
           - 'true'
         default: 'false'
+      rename_from:
+        description: '原项目名(自动处理大小写变体)'
+        required: false
+        default: ''
+      rename_to:
+        description: '新项目名(自动处理大小写变体)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -146,6 +154,44 @@ jobs:
         env:
           SOURCE_REPO: ${{ inputs.source_repo }}
           COMMIT_HASH: ${{ inputs.commit_hash }}
+
+      - name: 重命名项目
+        if: ${{ inputs.rename_from != '' && inputs.rename_to != '' }}
+        run: |
+          set -euo pipefail
+          FROM="$RENAME_FROM"
+          TO="$RENAME_TO"
+          FROM_LOWER=$(echo "$FROM" | tr '[:upper:]' '[:lower:]')
+          FROM_UPPER=$(echo "$FROM" | tr '[:lower:]' '[:upper:]')
+          TO_LOWER=$(echo "$TO" | tr '[:upper:]' '[:lower:]')
+          TO_UPPER=$(echo "$TO" | tr '[:lower:]' '[:upper:]')
+
+          EXPORT_DIR="${{ steps.extract.outputs.src_dir }}/export"
+          echo "🔄重命名：$FROM → $TO（含 $FROM_LOWER/$FROM_UPPER 变体）"
+
+          # 替换精确大小写
+          count=$(grep -rlIF "$FROM" "$EXPORT_DIR" 2>/dev/null | wc -l)
+          grep -rlIF "$FROM" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM|$TO|g"
+          echo "  $FROM → $TO：$count 个文件"
+
+          # 替换小写
+          if [ "$FROM_LOWER" != "$FROM" ]; then
+            count=$(grep -rlIF "$FROM_LOWER" "$EXPORT_DIR" 2>/dev/null | wc -l)
+            grep -rlIF "$FROM_LOWER" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM_LOWER|$TO_LOWER|g"
+            echo "  $FROM_LOWER → $TO_LOWER：$count 个文件"
+          fi
+
+          # 替换大写
+          if [ "$FROM_UPPER" != "$FROM" ] && [ "$FROM_UPPER" != "$FROM_LOWER" ]; then
+            count=$(grep -rlIF "$FROM_UPPER" "$EXPORT_DIR" 2>/dev/null | wc -l)
+            grep -rlIF "$FROM_UPPER" "$EXPORT_DIR" 2>/dev/null | xargs -r sed -i "s|$FROM_UPPER|$TO_UPPER|g"
+            echo "  $FROM_UPPER → $TO_UPPER：$count 个文件"
+          fi
+
+          echo "✅重命名完成"
+        env:
+          RENAME_FROM: ${{ inputs.rename_from }}
+          RENAME_TO: ${{ inputs.rename_to }}
 
       - name: 推送到目标仓库
         run: |
